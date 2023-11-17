@@ -469,12 +469,6 @@ export class GraphQLToOpenAPIConverter {
         },
         OperationDefinition: {
           enter(node) {
-            const openApiType = {
-              type: 'object',
-              properties: {
-                // To be filled by Field visitor
-              },
-            };
             if (!node.name) {
               error = new NoOperationNameError(
                 'GraphQLToOpenAPIConverter requires a named ' +
@@ -483,8 +477,16 @@ export class GraphQLToOpenAPIConverter {
               );
               return BREAK;
             }
-            openApiSchema.paths['/' + node.name.value] = operationDef = {
-              get: {
+
+            const openApiType = {
+              type: 'object',
+              properties: {},
+            };
+            const operationName = node.name.value;
+            const httpMethod = node.operation === 'mutation' ? 'post' : 'get';
+
+            openApiSchema.paths['/' + operationName] = operationDef = {
+              [httpMethod]: {
                 parameters: [],
                 responses: {
                   '200': {
@@ -514,28 +516,46 @@ export class GraphQLToOpenAPIConverter {
             scalarConfig,
             onUnknownScalar
           );
-          if (t.type === 'object' || t.type === 'array') {
-            operationDef.get.parameters.push({
-              name: variable.name.value,
-              in: 'query',
-              required: !t.nullable,
-              schema: {
-                type: t.type,
-                items: t.items,
-                properties: t.properties,
-              },
-              description: t.description || undefined,
-            });
+
+          const parameter = {
+            name: variable.name.value,
+            in: 'query', // default to query, this might change for POST requests
+            required: !t.nullable,
+            schema: {
+              type: t.type,
+              items: t.items,
+              properties: t.properties,
+            },
+            description: t.description || undefined,
+          };
+
+          if (this.currentOperationType === 'mutation') {
+            // For POST requests, add parameters to the request body
+            if (!operationDef.post.requestBody) {
+              operationDef.post.requestBody = {
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      properties: {},
+                    },
+                  },
+                },
+              };
+            }
+            operationDef.post.requestBody.content[
+              'application/json'
+            ].schema.properties[variable.name.value] = parameter.schema;
+            // Note: 'in', 'name', and 'required' fields are not relevant for requestBody
           } else {
-            operationDef.get.parameters.push({
-              name: variable.name.value,
-              in: 'query',
-              required: !t.nullable,
-              schema: {
-                type: t.type,
-              },
-              description: t.description || undefined,
-            });
+            if (!operationDef.get) {
+              operationDef.get = {
+                parameters: [],
+                responses: {}, // Initialize other necessary properties
+              };
+            }
+            // Add the parameter to the query for GET requests
+            operationDef.get.parameters.push(parameter);
           }
         },
         FragmentSpread: {
